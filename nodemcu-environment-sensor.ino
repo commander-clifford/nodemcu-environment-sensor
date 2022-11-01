@@ -1,3 +1,5 @@
+#include "config.h"
+
 #include <Wire.h> // I2C / etc
 #include <Adafruit_GFX.h> // Graphics Library
 #include <Adafruit_SSD1306.h> // OLED Display Library
@@ -51,10 +53,13 @@ int lastButtonStateTwo = HIGH; // the previous reading from the input pin
 int buttonStateThree; // the current reading from the input pin
 int lastButtonStateThree = HIGH; // the previous reading from the input pin
 
+int ioTimer = 0;
+// int ioTimeInterval = 150; // every NUM of loops - send data to Adafruitio
+
 // the following variables are unsigned longs because the time, measured in
 // milliseconds, will quickly become a bigger number than can be stored in an int.
 unsigned long lastDebounceTime = 0;  // the last time the output pin was toggled
-unsigned long debounceDelay = 50;    // the debounce time; increase if the output flickers
+unsigned long debounceDelay = 25;    // the debounce time; increase if the output flickers
 
 /*
   Display Mode Variable
@@ -95,11 +100,7 @@ void toggleDisplayMode(int displayMode) {
 
 void updateDisplay(int displayMode) {
 
-  /* Calculate Lux/Lumens */ 
-  int luxLineMeterLimit = 2000; // set sensitivity (0-20000)
-  int luxLineLimit = 104;
-  luxLinePixelsLength = (luxNum / luxLineMeterLimit)*luxLineLimit;
-  if(luxNum > luxLineMeterLimit) luxLinePixelsLength = luxLineLimit;
+  
 
   /* Choose Display Mode */ 
   switch (displayMode) {
@@ -217,14 +218,18 @@ void updateDisplay(int displayMode) {
 
 }
 
+// set up the 'temperature' and 'humidity' feeds
+AdafruitIO_Feed *living_room_desk_temperature = io.feed("Living Room Desk | Temperature");
+AdafruitIO_Feed *living_room_desk_humidity = io.feed("Living Room Desk | Humidity");
+AdafruitIO_Feed *living_room_desk_lux = io.feed("Living Room Desk | Lux");
+
 /*** SETUP ***/
 void setup(void) {
 
   // Initiate Serial Monitor 
   Serial.begin(115200);
-  // Testing Only
-  // Serial.print("\nInitiate max44009_interrupt : "); 
-  // Serial.println(MAX44009_LIB_VERSION);
+  Serial.print("\nInitiate max44009_interrupt : "); 
+  Serial.println(MAX44009_LIB_VERSION);
 
   // Initiate I2C
   Wire.begin();
@@ -235,11 +240,11 @@ void setup(void) {
   myLux.setLowThreshold(10); // Set Low Threshold
   myLux.setThresholdTimer(2); // Set Threshold Timer
   myLux.enableInterrupt(); // Enable Interrupt
-  // Testing Only
-  // Serial.print("HighThreshold:\t"); 
-  // Serial.println(myLux.getHighThreshold());
-  // Serial.print("LowThreshold:\t");
-  // Serial.println(myLux.getLowThreshold());
+
+  Serial.print("HighThreshold:\t"); 
+  Serial.println(myLux.getHighThreshold());
+  Serial.print("LowThreshold:\t");
+  Serial.println(myLux.getLowThreshold());
 
   // Buttons
   pinMode(BUTTONPIN1, INPUT_PULLUP);
@@ -267,6 +272,21 @@ void setup(void) {
   display.setTextColor(SSD1306_WHITE); // Draw white text (white ~= LED-ON)
   display.cp437(true); // Use full 256 char 'Code Page 437' font
   display.dim(false);
+  display.clearDisplay(); // Clear
+
+  // connect to io.adafruit.com
+  Serial.print("Connecting to Adafruit IO");
+  io.connect();
+
+  // wait for a connection
+  while(io.status() < AIO_CONNECTED) {
+    Serial.print(".");
+    delay(500);
+  }
+
+  // we are connected
+  Serial.println();
+  Serial.println(io.statusText());
 
 }
 
@@ -275,38 +295,70 @@ void loop() {
 
   // Serial.println("--Begin--Loop--");
 
+  // io.run(); is required for all sketches.
+  // it should always be present at the top of your loop
+  // function. it keeps the client connected to
+  // io.adafruit.com, and processes any incoming data.
+  io.run();
+
+  // Run Sensors once per second
   uint32_t interval = 1000;
   if (millis() - lastDisplay >= interval)
   {
     lastDisplay += interval;
+    
+    Serial.print("lastDisplay ");Serial.println(lastDisplay);
+    Serial.print("interval ");Serial.println(interval);
+
+    // Measure Lux
     float lux = myLux.getLux();
     luxNum = lux;
     int err = myLux.getError();
     int st = myLux.getInterruptStatus();
     if (err != 0)
     {
-      // Serial.print("Error:\t");
-      // Serial.println(err);
+      Serial.print("Error:\t");
+      Serial.println(err);
     }
     else
     {
-      // Serial.print("lux:\t");
-      // Serial.print(lux);
-      // if (st == 1) Serial.println("\tIRQ occu rred");
-      // else Serial.println();
+      Serial.print("lux:\t");
+      Serial.print(lux);
+      if (st == 1) Serial.println("\tIRQ occurred");
+      else Serial.println();
     }
+
+    /* Calculate Lux/Lumens */ 
+  int luxLineMeterLimit = 600; // set sensitivity (0-20000)
+  int luxLineLimit = 104;
+  luxLinePixelsLength = (luxNum / luxLineMeterLimit)*luxLineLimit;
+  if(luxNum > luxLineMeterLimit) luxLinePixelsLength = luxLineLimit;
+
+    // Measure Temp/Humid
+    sensors_event_t sensor_humidity, temp;
+    aht.getEvent(&sensor_humidity, &temp);// populate temp and sensor_humidity objects with fresh data
+    TEMP_C = temp.temperature;
+    TEMP_F = (temp.temperature * 1.8) + 32; // convert to Fahrenheit 
+    HUMIDITY = sensor_humidity.relative_humidity;
+    // Serial.print("Temperature: "); Serial.print(temp.temperature); Serial.println(" degrees C");
+    // Serial.print("Humidity: "); Serial.print(sensor_humidity.relative_humidity); Serial.println("% rH");
+
+    // Update Display
+    updateDisplay(displayMode);
+
   }
 
-  // Measure Temp/Humid
-  sensors_event_t humidity, temp;
-  aht.getEvent(&humidity, &temp);// populate temp and humidity objects with fresh data
-  TEMP_C = temp.temperature;
-  TEMP_F = (temp.temperature * 1.8) + 32; // convert to Fahrenheit 
-  HUMIDITY = humidity.relative_humidity;
-  // Serial.print("Temperature: "); Serial.print(temp.temperature); Serial.println(" degrees C");
-  // Serial.print("Humidity: "); Serial.print(humidity.relative_humidity); Serial.println("% rH");
 
-
+  // Send data to Adafruit every 60 seconds
+  uint32_t ioTimeInterval = 60000;
+  if (millis() - ioTimer >= ioTimeInterval){
+    ioTimer += ioTimeInterval;
+    living_room_desk_temperature->save(TEMP_F);
+    living_room_desk_humidity->save(HUMIDITY);
+    living_room_desk_lux->save(luxLinePixelsLength);
+    Serial.print("Publish to AdafruitIO: Temp "); Serial.print(TEMP_F); Serial.print(" / Humidity "); Serial.println(HUMIDITY);
+  } 
+  
   /*
     Buttons
     TODO: Use a for-loop for this
@@ -384,8 +436,7 @@ void loop() {
   }
   lastButtonStateThree = reading3;
 
-  // Update Display
-  updateDisplay(displayMode);
+
 
   // Serial.println("--End--Loop--");
 
